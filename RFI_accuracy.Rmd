@@ -1,0 +1,315 @@
+---
+title: " Genomic prediction - Residual feed intake - Accuracy"
+output: github_document
+---
+
+This program is used to calculate the accuracies of GEBV obtained with SAD models
+
+
+## Import required packages and set up work drive 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load required packages
+library(pacman)
+pacman::p_load(dplyr,reshape2, stringr, plyr, psych, corrplot,weights,wCorr,formattable,PerformanceAnalytics)
+
+
+# set path work drive
+#path=getwd()
+setwd("C:/Users/HP/OneDrive/RFI_all/RFI_all")
+```
+
+## Import output of SAD model run on validation dataset
+
+```{r}
+
+sln_sad <- read.table("sln_sadHp", quote="\"", comment.char="")
+names(sln_sad)<-c("V1","code","value","SE")
+sln_sad1=cbind(sln_sad,as.data.frame(matrix( unlist( strsplit(as.character(sln_sad$code)  , "\\.")), ncol = 2 , byrow = TRUE )))
+names(sln_sad1)<-c("V1","code","value1","SE","week","animal")
+sln_sad1$week=as.numeric(levels(sln_sad1$week))[sln_sad1$week]
+sln_sad2=arrange(sln_sad1,animal,week)
+N_animal=length(unique(sln_sad2$animal))  #number animal from SAD.sln
+
+head(sln_sad2,10)
+
+```
+
+
+# Import SAD with all data (training + validation dataset)
+```{r block2}
+sln_SAD <- read.table("sln_sadH", quote="\"", comment.char="")
+names(sln_SAD)<-c("V1","code","value","SE")
+sln_SAD1=cbind(sln_SAD,as.data.frame(matrix(unlist( strsplit(as.character(sln_SAD$code), "\\.")), ncol = 2 , byrow = TRUE )))
+names(sln_SAD1)<-c("V1","code","value1","SE","week","animal")
+sln_SAD1$week=as.numeric(levels(sln_SAD1$week))[sln_SAD1$week]
+sln_SAD2=arrange(sln_SAD1,animal,week)
+
+head(sln_SAD2)
+```
+
+## Compute CD 
+
+```{r block 3}
+
+sigmaH <- diag(as.matrix(read.table("G_SADH", quote="\"", comment.char="")))
+sln_SAD2$sigmaH <- c(rep(sigmaH,3986))
+sln_SAD2$CD <- sqrt(1 - (sln_SAD2$SE)^2/(sln_SAD2$sigmaH))
+head(sln_SAD2,20)
+
+
+```
+
+
+
+## Summarize CD
+```{r block4}
+CD_mean <- matrix(0,10,1)
+for (i in (1:10)){
+  sln_SAD3 <- subset(sln_SAD2, week == i)
+  CD_mean[i] <- mean(sln_SAD3$CD, na.rm = TRUE)
+}
+
+ CD_mean
+```
+
+
+
+## Import  the corrected phenotypes file
+```{r block5}
+
+pheno_corrected <- read.table("DATA_corrected.txt", header=TRUE, quote="\"")
+pheno_corrected =arrange(pheno_corrected ,gener,animal)
+pheno_corrected $cd=as.numeric(pheno_corrected $gener)
+pheno_corrected =subset(pheno_corrected ,pheno_corrected$cd>=6) # select the generation G5-G7, cd =6-8
+#l==1 , corrected missing phenotype,l==2 corrected phenotypes
+
+#Here ,if RFI+ put "+" else "-"
+pheno_corrected =subset(pheno_corrected ,lignee=="-")
+
+head(pheno_corrected,10)
+
+```
+
+**Genotyped animals**
+```{r block6}
+list_g <- read.table("list", quote="\"")
+names(list_g)= c("N","animal") 
+head(list_g,5)
+```
+
+
+```{r block7}
+critere="animal"
+DF_s=merge(pheno_corrected,sln_sad2,by=c("animal","week"))
+DF_s=arrange(DF_s,animal,week)
+EF=arrange(DF_s,animal,week)
+head(EF,10)
+```
+
+```{r block8}
+mydfSAD=merge(EF,list_g,c("animal"))
+mydfSAD1=arrange(mydfSAD,animal,week)
+head(mydfSAD1)
+```
+
+
+
+```{r block9}
+
+h2_H=c( 0.3645753, 0.2301381, 0.1765176, 0.1561680, 0.1534512, 0.1620227, 0.1781751,
+0.1993510, 0.2263479, 0.2713567)
+
+
+
+CD_mean
+for (i in (1:10)){
+  out = with(subset(mydfSAD1, week == i),weightedCorr(value1,y_SADH,method="pearson",w))
+  #cat("######################################################","\n")
+  cat("week",i, "\n")
+  #print(out)
+  print(out/sqrt(h2_H[i]))
+  print(out/(CD_mean[i]))
+}
+```
+
+## Bias
+
+```{r block10}
+for (i in (1:10)){
+  out =  summary(lm( y_SADH~value1  ,data=subset(mydfSAD1,week==i),weight=w))$coefficients 
+  cat("######################################################")
+  cat("week",i)
+  print(out[2,1]-0.5)
+  print(out)
+}
+```
+
+```{r block11}
+
+G_SADH <- as.matrix(read.table("G_sADH", quote="\"", comment.char=""))
+week <- c(1:10)
+vec2 <- eigen(G_SADH)$vectors[,2]
+vec1 <- eigen(G_SADH)$vectors[,1]
+eigen_dat <- cbind.data.frame(week,vec1,vec2)
+
+mydfSAD1$GEBV <- mydfSAD1$value1
+MD <- merge(mydfSAD1, eigen_dat, by = "week")
+
+
+MD1 <- arrange(MD,animal,week)
+MD1$y_SADH1 <- MD1$vec1 * MD1$y_SADH
+MD1$y_SADH2 <- MD1$vec2 * MD1$y_SADH
+MD1$SBVH1 <- MD1$vec1 * MD1$GEBV
+MD1$SBVH2 <- MD1$vec2 * MD1$GEBV
+```
+
+
+
+
+
+
+```{r block12}
+library(dplyr)
+MD2 <- MD1 %>%
+  group_by(MD1$animal) %>%
+  mutate(y_SADH1 = sum(y_SADH1, na.rm = TRUE), 
+         y_SADH2 = sum(y_SADH2, na.rm = TRUE),
+         SBVH1 = sum(SBVH1, na.rm = TRUE),
+         SBVH2 = sum(SBVH2, na.rm = TRUE))
+
+head(MD2)
+```
+
+
+
+
+
+
+```{r block13}
+
+
+MD3 <- MD2 %>%
+  group_by(animal) %>% 
+  
+  select(animal,lignee,gener,w,y_RR,y_RRH,y_SAD,y_SADH,y_MT,y_MTH,y_FI,y_FCR,y_RFI,y_ADG,y_SADH1,y_SADH2, SBVH1,SBVH2)  %>% 
+  
+  filter(row_number()==1)
+
+
+head(MD3,10)
+
+
+
+
+```
+
+```{r block141}
+with(MD3,wtd.cor(y_SADH1,SBVH1,w))
+with(MD3,wtd.cor(y_SADH2,SBVH2,w))
+```
+
+
+
+```{r block142}
+
+abs(with(MD3,wtd.cor(y_SADH1,SBVH1,w))/0.6798429)
+abs(with(MD3,wtd.cor(y_SADH2,SBVH2,w))/0.6591559)
+
+
+with(MD3,wtd.cor(y_SADH1,SBVH1))
+with(MD3,wtd.cor(y_SADH2,SBVH2))
+```
+
+
+
+
+
+
+
+## Bias
+
+```{r block15}
+
+
+with(MD3,lm(y_SADH1~SBVH1,weight=w))$coefficients 
+with(MD3,lm(y_SADH2~SBVH2,weight=w))$coefficients 
+```
+
+
+
+
+
+
+
+## CD for SGBV1 vs SGBV2
+
+
+```{r block16}
+
+SBV_fun <- function(SE_EBV, G, k){
+  V <- cov2cor(G)
+  L1 <-  cor2cov(V, (SE_EBV*eigen(G)$vectors[,k])^2)
+  CD_SBV1 <-   sum((L1 + diag(L1))/2)
+  return(CD_SBV1)
+  
+}
+
+
+sln_SAD2_CD <- select(sln_sad2,animal,SE,week)
+sln_mat =as.matrix(reshape(sln_SAD2_CD,varying = NULL, timevar = "week",idvar = "animal",direction="wide",sep="")[,2:11])
+
+
+
+
+CD_SBV_SAD1 <- matrix(0,3986,1)
+for (i in (1:3986)){
+  CD_SBV_SAD1[i] <- unlist(SBV_fun( as.vector(sln_mat[i,]),G_SADH,1))
+  
+}
+
+
+g_SBV1 <- unlist(SBV_fun( as.vector(sqrt(diag(G_SADH))),G_SADH,1))
+
+
+sqrt(1- mean(CD_SBV_SAD1)/g_SBV1)
+
+
+# 0.6798429
+
+
+
+CD_SBV_SAD2 <- matrix(0,3986,1)
+for (i in (1:3986)){
+  CD_SBV_SAD2[i] <- unlist(SBV_fun( as.vector(sln_mat[i,]),G_SADH,2))
+ 
+}
+
+
+g_SBV2 <- unlist(SBV_fun( as.vector(sqrt(diag(G_SADH))),G_SADH,2))
+
+
+sqrt(1-mean(CD_SBV_SAD2)/g_SBV2)
+
+
+# 0.6591559
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
